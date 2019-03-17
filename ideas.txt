@@ -1,0 +1,75 @@
+On top of my mind: what would I have done differently if I were to redesign ML?
+
+Important issues in language design: (very broadly speaking)
+- The equality type stuff, get rid of that obviously.
+- Implement and expose the full module type theory as defined in karl's modules and abstraction paper (also in HOT lecture)
+  - includes proper applicative functors (not the horrifying way Caml does it)
+  - packed first class modules as existentials
+  - higher order functors
+  - automatically fix structure sharing as signature patching for the relevant tycon to be a singleton kind.
+  ignore what the 2nd "official" defn is doing, this is easily done during elaboration
+- Implement the modular type classes paper, as a drop in extension instead of equality types. This
+automatically gets rid of the overloading stuff that should've never been there in the first place.
+- `datatype` is exceptionally deceptive. There's "views" as a concept by Wadler, but that looks
+exactly like `datatype` post elaboration in the first place. More details below.
+- compilation units for true seperate compilation with caching, also from paper by Bob and Tom Murphy.
+- FFI as unsafe extension. We can pretend it is not there when proving typesafety, since it obviously will break typesafety.
+
+Minor things mildly annoying:
+- `ref` is defined in the language because it needs to be to give proper dynamics on references,
+but there's always that one guy who's a segregationist. Perhaps define `ref` in the IL, and refuse
+to elaborate in EL. Instead, force people use a library (segregationist or not) that make use of
+references. At toplevel we can automatically open one of the implementations, so users
+won't even notice the difference (basically what SML Basis does).
+  - the one drawback is that trying to recover pattern matching could be tricky, unless it is also defined
+  as `datatype` (haoxuany: maybe it should).
+- first class continuations should be defined in the language. most good compilers implement it already.
+- `exn` is a singular dynamic sum type, but should there be another dynamic sum type that prohibits `raise`?
+it can be useful to have such a construct to add some additional checking, although not too important.
+- support for concurrency as implementation library, at a language layer this is harder to do (technically this idea isn't related to languages)
+
+Technical issues (that I have no clear answer for yet):
+- if doing TIL, what would compilation units look like in lower language layers for caching purposes?
+  - implementation-wise, add labels to language for seperate compilation purposes on top of crary (I think this is necessary, done in the modular type classes paper).
+- `datatype` maybe should be replaced with its elaborated form of construction and destruction, this provides data abstraction internally,
+and (as I see it) would be extremely useful for FFI purposes (`type ptr = address option`, `type 'a list = ptr ffi_list` etc.)
+  - how will this work with pattern matching? how will this work with the coercion interpretation of datatype? (aka this will automatically create a performance cost)
+  - how will this work with modular typeclasses? that paper conveniently sidesteps this elaboration (ugh).
+  - should products also be `datatype`?
+    - my understanding (could be wrong): the reason the transparent interpretation of `datatype` is not strictly more permissive is not about sums, but about recursive
+	types. the specific scenario the paper produced does not appear to be reproducable when restricted to sums only.
+	- on the upside, `datatype` makes type inference *easy* due to elaborated constructors that automatically have the right function type. This could be useful
+	for product types as well (as for how to do this nicely I have no clue)
+	- idea: maybe use `datatype` specifically for recursive types, and provide transparent interpretations of sums and products. This isolates the problem into
+	proper type theory constructs.
+	- never touched a proof of this, so this idea could likely crash and burn (I'm expecting it).
+- modular type classes elaboration paper sidesteps certain pragmatic issues for EL.
+  - polymorphism, recursive types etc looks good, but pain and suffering to write general functors for n-ary sums and products.
+  - example: getting a canonical functor for the type `{hey : 'a, you : 'b}` for function `to_string`.
+  - expects: `functor (struct A, struct B) = { fun to_string (hey, you) = "{ hey = " ^ A.to_string hey ^ ", you = " ^ B.to_string you ^ "}" }`
+  - modules `A` and `B` are easy, just type infer and construct dictionary, but can't write this sufficiently *generic* functor for n-ary products (of course also sums)
+  with arbitrary labels.
+  - (does `datatype` make it worse? looks like it, especially if we want to directly represent its elaboration)
+  - possible solution: metaprogramming, not fun, requires a seperate layer of abstraction.
+  - idea: evident in HOT, and especially in code, that all it is is a label + type.
+  - example: `label foo = Foo of string; datatype x = foo | Bar of int; type y = {foo, bar : int}`. some people call it rows. (ignore `datatype` issues for now)
+  - idea: allow modules to contain special type components. right now ML allows `T` and `T^n -> T` etc, allow `\Sigma comp :: lbl^n -> Csum comp`
+  as type components and similar for products. provides special destructors for getting label names and components.
+  during type inference, when generating this functor, the param is a product of relevant modules for the type, labeled by the same corresponding labels.
+  - module type theory supports this natively! Doesn't look like an issue after we get into IL. MTT poses no restriction on the kinds of the fst of modules in the first place.
+  - looks like a very nontrivial extension to EL, especially to elaboration and type inference and concrete syntax design, expecting this idea to crash and burn.
+
+Uninteresting things that have nothing to do with the language but should still be fixed:
+- some string/char and other scon conveniences (perhaps `(3 : real)` as syntatic sugar for `3.0`, etc for word,
+when parsing specifically look at `(scon : con)` where `con :: Type`, so people can add compiler hooks
+to infer scon and do default construction.
+- do fixity (probably) the way haskell does it, fixity is downright broken in ML at this point.
+- parsing pattern is crazy, add terminators for things `try ... handle ... end` etc.
+- other minor parsing things that can be obsoleted (existential declarations, `val 'a foo` no one writes code like that anymore, etc.).
+- macros for filename, line location etc, meta language constructs, makes debugging things easy (aka exception constructors need to contain line number).
+
+Things inclined not to do:
+- recursive modules. technical complexity, also appears to break seperate compilation and type inference. Closest thing available is Derek Dreyer's thesis.
+- "row polymorphism", seems to break first class modules, probably just add some elaborated form for record reconstruction, not that hard albeit annoying.
+- dependent types. decidability issues if a proof checker isn't also integrated. nontrivial for programmers, also no idea how to do type inference.
+- object system, obviously not.
